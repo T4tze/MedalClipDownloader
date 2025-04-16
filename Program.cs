@@ -1,18 +1,24 @@
-﻿using System.Text.RegularExpressions;
+using System;
+using System.IO;
+using System.Threading;
+using System.Net.Http;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 using System.Diagnostics;
-
+using System.Threading.Tasks;
 
 class Program
 {
     static string X_Authentication = "";
+    static string downloadDirectory = "Clips"; // Default download directory
     static long totalBytesDownloaded = 0;
     static double totalElapsedTime = 0;
+
     static async Task Main(string[] args)
     {
         Console.Clear();
         Console.Title = "Medal.tv Clip Downloader";
-        string[] options = new string[] { "[1] Download All Profile Clips", "[2] Download a Clip" };
+        string[] options = new string[] { "[1] Download All Profile Clips", "[2] Download a Clip", "[3] Set Download Directory" };
         PrintMenu(options);
         string choice = Console.ReadKey().KeyChar.ToString();
         Console.WriteLine();
@@ -24,11 +30,32 @@ class Program
             case "2":
                 await DownloadClip();
                 break;
+            case "3":
+                SetDownloadDirectory();
+                break;
             default:
                 Console.WriteLine("Invalid choice.");
                 break;
         }
     }
+
+    static void SetDownloadDirectory()
+    {
+        Console.Clear();
+        PrintMenu(new string[] { "Enter the directory where clips should be downloaded:" });
+        string directory = Console.ReadLine();
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            downloadDirectory = directory;
+            Console.WriteLine($"Download directory set to: {downloadDirectory}");
+        }
+        else
+        {
+            Console.WriteLine("Invalid directory. Using default: Clips");
+        }
+        Thread.Sleep(1000);
+    }
+
     static async Task DownloadAllClips()
     {
         Console.Clear();
@@ -62,13 +89,17 @@ class Program
                 var response = await client.SendAsync(request);
                 var body = await response.Content.ReadAsStringAsync();
                 var json = JArray.Parse(body);
-                offset = json.Count;
-                int i = 0;
+
                 if (json.Count == 0)
+                {
                     finished = true;
+                    break;
+                }
+
+                Console.WriteLine($"\nClips remaining in batch: {json.Count}");
+
                 foreach (var clip in json)
                 {
-                    i++;
                     var contentUrl1080p = clip["contentUrl1080p"].ToString();
                     var contentUrl720p = clip["contentUrl720p"].ToString();
                     var contentUrl480p = clip["contentUrl480p"].ToString();
@@ -84,13 +115,15 @@ class Program
                         contentUrl480p = clip["thumbnail480p"].ToString();
                     }
 
-                    if (await DownloadURL(contentUrl1080p, contentTitle, contentId, "1080p", i, offset))
+                    if (await DownloadURL(contentUrl1080p, contentTitle, contentId, "1080p", offset + 1, json.Count))
                         continue;
-                    else if (await DownloadURL(contentUrl720p, contentTitle, contentId, "720p", i, offset))
+                    else if (await DownloadURL(contentUrl720p, contentTitle, contentId, "720p", offset + 1, json.Count))
                         continue;
-                    else if (await DownloadURL(contentUrl480p, contentTitle, contentId, "480p", i, offset))
+                    else if (await DownloadURL(contentUrl480p, contentTitle, contentId, "480p", offset + 1, json.Count))
                         continue;
                 }
+
+                offset += json.Count;
             }
         }
         catch (Exception e)
@@ -104,6 +137,7 @@ class Program
         Thread.Sleep(1000);
         await Main(null);
     }
+
     static async Task DownloadClip()
     {
         Console.Clear();
@@ -133,7 +167,6 @@ class Program
             contentUrl720p = clip["thumbnail720p"].ToString();
             contentUrl480p = clip["thumbnail480p"].ToString();
         }
-        
 
         if (await DownloadURL(contentUrl1080p, contentTitle, contentId, "1080p", 1, 1))
         {
@@ -150,17 +183,18 @@ class Program
             Thread.Sleep(1000);
             await Main(null);
         }
-
-
     }
+
     static async Task<bool> DownloadURL(string url, string contentTitle, string contentId, string quality, long index, long max)
     {
-        if (!Directory.Exists("Clips"))
-            Directory.CreateDirectory("Clips");
+        if (!Directory.Exists(downloadDirectory))
+            Directory.CreateDirectory(downloadDirectory);
         try
         {
             string fileextension = url.Split('.').Last();
             fileextension = fileextension.Substring(0, fileextension.IndexOf("?"));
+            string filePath = $"{downloadDirectory}/{contentTitle}_{contentId}_{quality}.{fileextension}";
+
             var client = new HttpClient();
             var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
             var totalBytes = response.Content.Headers.ContentLength ?? -1L;
@@ -173,15 +207,15 @@ class Program
                     var (bytesDownloaded, speed) = report;
                     if (canReportProgress)
                     {
-                        Console.Write($"\r{contentTitle}.{fileextension}({index}/{max}): {bytesDownloaded}/{totalBytes} bytes ({(bytesDownloaded / (double)totalBytes) * 100:0.00}%) - Speed: {speed:0.00} MB/s                          ");
+                        Console.Write($"\rDownloading: {contentTitle} ({quality}) to {filePath} - {bytesDownloaded}/{totalBytes} bytes ({(bytesDownloaded / (double)totalBytes) * 100:0.00}%) - Speed: {speed:0.00} MB/s                          ");
                     }
                     else
                     {
-                        Console.Write($"\r{contentTitle}.{fileextension}({index}/{max}): {bytesDownloaded} bytes - Speed: {speed:0.00} MB/s                                                                                              ");
+                        Console.Write($"\rDownloading: {contentTitle} ({quality}) to {filePath} - {bytesDownloaded} bytes - Speed: {speed:0.00} MB/s                                                                                              ");
                     }
                 });
 
-                using (var fileStream = new FileStream($"Clips/{contentTitle}_{contentId}_{quality}.{fileextension}", FileMode.Create, FileAccess.Write, FileShare.None))
+                using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
                     var stopwatch = Stopwatch.StartNew();
                     await CopyToAsync(stream, fileStream, 81920, progress);
@@ -191,14 +225,14 @@ class Program
                     totalElapsedTime += stopwatch.Elapsed.TotalSeconds;
                 }
             }
-            Console.WriteLine();
+            Console.WriteLine($"\nDownloaded Successfully: {contentTitle} ({quality}) to {filePath}");
             return true;
         }
         catch (Exception e)
         {
             Console.BackgroundColor = ConsoleColor.Red;
             Console.ForegroundColor = ConsoleColor.Black;
-            Console.WriteLine($"Failed to download {contentTitle}_{contentId}_{quality}.mp4\nReason: {e.Message}");
+            Console.WriteLine($"\nFailed to download {contentTitle} ({quality}). Reason: {e.Message}");
             Console.ResetColor();
             return false;
         }
@@ -216,14 +250,13 @@ class Program
             await destination.WriteAsync(buffer, 0, bytesRead);
             totalBytesRead += bytesRead;
             var elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
-            var speed = (totalBytesRead / 1024d / 1024d) / elapsedSeconds; 
+            var speed = (totalBytesRead / 1024d / 1024d) / elapsedSeconds;
             progress?.Report((totalBytesRead, speed));
         }
     }
 
     static void PrintMenu(string[] options)
     {
-        // ┌┐└┘├┤┬┴┼│─» ►
         string menu = "";
         int longestoption = 0;
 
