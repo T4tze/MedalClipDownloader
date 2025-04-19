@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading;
 using System.Net.Http;
@@ -18,24 +18,34 @@ class Program
     {
         Console.Clear();
         Console.Title = "Medal.tv Clip Downloader";
-        string[] options = new string[] { "[1] Download All Profile Clips", "[2] Download a Clip", "[3] Set Download Directory" };
-        PrintMenu(options);
-        string choice = Console.ReadKey().KeyChar.ToString();
-        Console.WriteLine();
-        switch (choice)
+        bool exitProgram = false;
+
+        while (!exitProgram)
         {
-            case "1":
-                await DownloadAllClips();
-                break;
-            case "2":
-                await DownloadClip();
-                break;
-            case "3":
-                SetDownloadDirectory();
-                break;
-            default:
-                Console.WriteLine("Invalid choice.");
-                break;
+            string[] options = new string[] { "[1] Download All Profile Clips", "[2] Download a Clip", "[3] Set Download Directory", "[4] Exit" };
+            PrintMenu(options);
+            string choice = Console.ReadKey().KeyChar.ToString();
+            Console.WriteLine();
+
+            switch (choice)
+            {
+                case "1":
+                    await DownloadAllClips();
+                    break;
+                case "2":
+                    await DownloadClip();
+                    break;
+                case "3":
+                    SetDownloadDirectory();
+                    break;
+                case "4":
+                    exitProgram = true;
+                    Console.WriteLine("Exiting the program. Goodbye!");
+                    break;
+                default:
+                    Console.WriteLine("Invalid choice. Please select a valid option.");
+                    break;
+            }
         }
     }
 
@@ -58,137 +68,202 @@ class Program
 
     static async Task DownloadAllClips()
     {
-        Console.Clear();
-        PrintMenu(new string[] { "Enter the profile link" });
-        string profileLink = Console.ReadLine();
-        PrintMenu(new string[] { "Enter your X-Authentication Token" });
-        X_Authentication = Console.ReadLine();
+        while (true)
+        {
+            Console.Clear();
+            PrintMenu(new string[] { "Enter the profile link (or type 'back' to return to the main menu):" });
+            string profileLink = Console.ReadLine();
+            if (profileLink.ToLower() == "back") return;
 
+            PrintMenu(new string[] { "Enter your X-Authentication Token (or type 'back' to return to the main menu):" });
+            X_Authentication = Console.ReadLine();
+            if (X_Authentication.ToLower() == "back") return;
+
+            if (string.IsNullOrWhiteSpace(profileLink) || string.IsNullOrWhiteSpace(X_Authentication))
+            {
+                Console.WriteLine("Profile link or authentication token cannot be empty. Please try again.");
+                continue;
+            }
+
+            try
+            {
+                await ProcessProfileClips(profileLink);
+                break;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Error: {e.Message}");
+                Console.WriteLine("An error occurred. Please check your inputs and try again.");
+            }
+        }
+    }
+
+    static async Task ProcessProfileClips(string profileLink)
+    {
         var client = new HttpClient();
-
         string html = await client.GetStringAsync(profileLink);
+
         var regex = new Regex(@"(?<=""userId"":"")\d+");
         var match = regex.Match(html);
+
+        if (!match.Success)
+        {
+            throw new Exception("Invalid profile link or user ID not found.");
+        }
+
         string userId = match.Value;
         long offset = 0;
         bool finished = false;
-        try
+
+        while (!finished)
         {
-            while (!finished)
+            var request = new HttpRequestMessage
             {
-                var request = new HttpRequestMessage
+                Method = HttpMethod.Get,
+                Headers =
                 {
-                    Method = HttpMethod.Get,
-                    Headers =
-                    {
-                        { "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0" },
-                        { "X-Authentication", X_Authentication },
-                    },
-                };
-                request.RequestUri = new Uri($"https://medal.tv/api/content?userId={userId}&offset={offset}&sortBy=publishedAt&sortDirection=DESC");
-                var response = await client.SendAsync(request);
-                var body = await response.Content.ReadAsStringAsync();
-                var json = JArray.Parse(body);
+                    { "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0" },
+                    { "X-Authentication", X_Authentication },
+                },
+            };
+            request.RequestUri = new Uri($"https://medal.tv/api/content?userId={userId}&offset={offset}&sortBy=publishedAt&sortDirection=DESC");
 
-                if (json.Count == 0)
-                {
-                    finished = true;
-                    break;
-                }
+            var response = await client.SendAsync(request);
 
-                Console.WriteLine($"\nClips remaining in batch: {json.Count}");
-
-                foreach (var clip in json)
-                {
-                    var contentUrl1080p = clip["contentUrl1080p"].ToString();
-                    var contentUrl720p = clip["contentUrl720p"].ToString();
-                    var contentUrl480p = clip["contentUrl480p"].ToString();
-                    var videoLengthSeconds = clip["videoLengthSeconds"].ToString();
-
-                    string contentId = clip["contentId"].ToString();
-                    string contentTitle = clip["contentTitle"].ToString().Replace(" ", "_").Replace(@"""", "");
-
-                    if (contentTitle.Contains("Instant_Screenshot") && videoLengthSeconds == "1")
-                    {
-                        contentUrl1080p = clip["thumbnail1080p"].ToString();
-                        contentUrl720p = clip["thumbnail720p"].ToString();
-                        contentUrl480p = clip["thumbnail480p"].ToString();
-                    }
-
-                    if (await DownloadURL(contentUrl1080p, contentTitle, contentId, "1080p", offset + 1, json.Count))
-                        continue;
-                    else if (await DownloadURL(contentUrl720p, contentTitle, contentId, "720p", offset + 1, json.Count))
-                        continue;
-                    else if (await DownloadURL(contentUrl480p, contentTitle, contentId, "480p", offset + 1, json.Count))
-                        continue;
-                }
-
-                offset += json.Count;
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new Exception($"Failed to fetch clips. HTTP Status: {response.StatusCode}. Reason: {response.ReasonPhrase}");
             }
+
+            var body = await response.Content.ReadAsStringAsync();
+            var json = JArray.Parse(body);
+
+            if (json.Count == 0)
+            {
+                finished = true;
+                break;
+            }
+
+            Console.WriteLine($"\nClips remaining in batch: {json.Count}");
+
+            foreach (var clip in json)
+            {
+                var contentUrl1080p = clip["contentUrl1080p"]?.ToString();
+                var contentUrl720p = clip["contentUrl720p"]?.ToString();
+                var contentUrl480p = clip["contentUrl480p"]?.ToString();
+                var videoLengthSeconds = clip["videoLengthSeconds"]?.ToString();
+
+                string contentId = clip["contentId"]?.ToString();
+                string contentTitle = clip["contentTitle"]?.ToString().Replace(" ", "_").Replace(@"""", "");
+
+                if (string.IsNullOrWhiteSpace(contentTitle) || string.IsNullOrWhiteSpace(contentId))
+                {
+                    Console.WriteLine("Clip metadata is incomplete. Skipping...");
+                    continue;
+                }
+
+                if (contentTitle.Contains("Instant_Screenshot") && videoLengthSeconds == "1")
+                {
+                    contentUrl1080p = clip["thumbnail1080p"]?.ToString();
+                    contentUrl720p = clip["thumbnail720p"]?.ToString();
+                    contentUrl480p = clip["thumbnail480p"]?.ToString();
+                }
+
+                if (await DownloadURL(contentUrl1080p, contentTitle, contentId, "1080p", offset + 1, json.Count))
+                    continue;
+                else if (await DownloadURL(contentUrl720p, contentTitle, contentId, "720p", offset + 1, json.Count))
+                    continue;
+                else if (await DownloadURL(contentUrl480p, contentTitle, contentId, "480p", offset + 1, json.Count))
+                    continue;
+            }
+
+            offset += json.Count;
         }
-        catch (Exception e)
-        {
-            Console.BackgroundColor = ConsoleColor.Red;
-            Console.ForegroundColor = ConsoleColor.Black;
-            Console.WriteLine(e.Message);
-            Console.ResetColor();
-        }
-        Console.Title = $"Downloaded {totalBytesDownloaded / 1024 / 1024} MB in {totalElapsedTime:0.00} seconds with an average download speed of {(totalBytesDownloaded / 1024d / 1024d) / totalElapsedTime:0.00} MB/s";
-        Thread.Sleep(1000);
-        await Main(null);
     }
 
     static async Task DownloadClip()
     {
-        Console.Clear();
-        PrintMenu(new string[] { "Enter the clip link" });
-        string clipLink = Console.ReadLine();
+        while (true)
+        {
+            Console.Clear();
+            PrintMenu(new string[] { "Enter the clip link (or type 'back' to return to the main menu):" });
+            string clipLink = Console.ReadLine();
+            if (clipLink.ToLower() == "back") return;
+
+            if (string.IsNullOrWhiteSpace(clipLink))
+            {
+                Console.WriteLine("Clip link cannot be empty. Please try again.");
+                continue;
+            }
+
+            try
+            {
+                await ProcessClipDownload(clipLink);
+                break;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Error: {e.Message}");
+                Console.WriteLine("An error occurred. Please check your clip link and try again.");
+            }
+        }
+    }
+
+    static async Task ProcessClipDownload(string clipLink)
+    {
         var client = new HttpClient();
         string html = await client.GetStringAsync(clipLink);
+
         var regex = new Regex(@"(?<=var hydrationData=)[\s\S]*?(?=</script>)");
         var match = regex.Match(html);
+
+        if (!match.Success)
+        {
+            throw new Exception("Invalid clip link or hydration data not found.");
+        }
+
         regex = new Regex(@"(?<=""contentId"":"")[\s\S]*?(?="")");
         var cidmatch = regex.Match(match.Value);
-        string contentIdd = cidmatch.Value;
+
+        if (!cidmatch.Success)
+        {
+            throw new Exception("Clip ID not found in the provided link.");
+        }
+
+        string contentId = cidmatch.Value;
         string json = match.Value;
         JObject jjson = JObject.Parse(json);
-        JObject clips = JObject.Parse(jjson["clips"].ToString());
-        JObject clip = JObject.Parse(clips[contentIdd].ToString());
-        string contentUrl1080p = clip["contentUrl1080p"].ToString();
-        string contentUrl720p = clip["contentUrl720p"].ToString();
-        string contentUrl480p = clip["contentUrl480p"].ToString();
-        string videoLengthSeconds = clip["videoLengthSeconds"].ToString();
-        string contentId = clip["contentId"].ToString();
-        string contentTitle = clip["contentTitle"].ToString().Replace(" ", "_").Replace(@"""", "");
+        JObject clips = JObject.Parse(jjson["clips"]?.ToString() ?? "{}");
+        JObject clip = JObject.Parse(clips[contentId]?.ToString() ?? "{}");
 
-        if (contentTitle.Contains("Instant_Screenshot") && videoLengthSeconds == "1")
+        string contentUrl1080p = clip["contentUrl1080p"]?.ToString();
+        string contentUrl720p = clip["contentUrl720p"]?.ToString();
+        string contentUrl480p = clip["contentUrl480p"]?.ToString();
+        string contentTitle = clip["contentTitle"]?.ToString().Replace(" ", "_").Replace(@"""", "");
+
+        if (string.IsNullOrWhiteSpace(contentTitle) || string.IsNullOrWhiteSpace(contentId))
         {
-            contentUrl1080p = clip["thumbnail1080p"].ToString();
-            contentUrl720p = clip["thumbnail720p"].ToString();
-            contentUrl480p = clip["thumbnail480p"].ToString();
+            throw new Exception("Clip metadata is incomplete. Cannot proceed with download.");
         }
 
-        if (await DownloadURL(contentUrl1080p, contentTitle, contentId, "1080p", 1, 1))
-        {
-            Thread.Sleep(1000);
-            await Main(null);
-        }
-        else if (await DownloadURL(contentUrl720p, contentTitle, contentId, "720p", 1, 1))
-        {
-            Thread.Sleep(1000);
-            await Main(null);
-        }
-        else if (await DownloadURL(contentUrl480p, contentTitle, contentId, "480p", 1, 1))
-        {
-            Thread.Sleep(1000);
-            await Main(null);
-        }
+        if (await DownloadURL(contentUrl1080p, contentTitle, contentId, "1080p", 1, 1)) return;
+        if (await DownloadURL(contentUrl720p, contentTitle, contentId, "720p", 1, 1)) return;
+        if (await DownloadURL(contentUrl480p, contentTitle, contentId, "480p", 1, 1)) return;
+
+        throw new Exception("Failed to download the clip in all available qualities.");
     }
 
     static async Task<bool> DownloadURL(string url, string contentTitle, string contentId, string quality, long index, long max)
     {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Console.WriteLine($"URL for {contentTitle} ({quality}) is invalid. Skipping...");
+            return false;
+        }
+
         if (!Directory.Exists(downloadDirectory))
             Directory.CreateDirectory(downloadDirectory);
+
         try
         {
             string fileextension = url.Split('.').Last();
@@ -197,6 +272,13 @@ class Program
 
             var client = new HttpClient();
             var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"Failed to download {contentTitle} ({quality}). HTTP Status: {response.StatusCode}. Reason: {response.ReasonPhrase}");
+                return false;
+            }
+
             var totalBytes = response.Content.Headers.ContentLength ?? -1L;
             var canReportProgress = totalBytes != -1;
 
@@ -230,10 +312,7 @@ class Program
         }
         catch (Exception e)
         {
-            Console.BackgroundColor = ConsoleColor.Red;
-            Console.ForegroundColor = ConsoleColor.Black;
             Console.WriteLine($"\nFailed to download {contentTitle} ({quality}). Reason: {e.Message}");
-            Console.ResetColor();
             return false;
         }
     }

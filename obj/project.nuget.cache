@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "AbWfp3eDt3A=",
+  "success": true,
+  "projectFilePath": "F:\\repo\\MedalClipDownloader-master\\MedalClipDownloader.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\t4tze\\.nuget\\packages\\newtonsoft.json\\13.0.3\\newtonsoft.json.13.0.3.nupkg.sha512"
+  ],
+  "logs": []
+}
